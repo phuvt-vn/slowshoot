@@ -210,7 +210,7 @@
       Enemies Left: <span id="enemies-left">0</span><br>
       Boss: <span id="boss-hp"></span>
     </div>
-    <div id="hint">WASD di chuyển • Chuột nhìn • Click bắn • Shift dash • F đóng băng thời gian • E nhặt súng • R để chơi lại</div>
+    <div id="hint">WASD di chuyển • Chuột nhìn • Click bắn • Shift dash • F đóng băng thời gian • E nhặt súng • ESC tạm dừng • R để chơi lại</div>
   </div>
 
   <div id="overlay">
@@ -392,6 +392,7 @@
     let mouseDown = false;
     let isAiming = false;
     let gameOver = false;
+    let paused = false;
     let playTime = 0;
     let gameWon = false;
 
@@ -2713,6 +2714,7 @@
 
     function resetGame() {
       gameOver = false;
+      paused = false;
       gameWon = false;
       playTime = 0;
       player.hp = 100;
@@ -3380,8 +3382,20 @@
 
     let pointerLockGrace = 0;
     document.addEventListener("pointerlockchange", () => {
-      if (!document.pointerLockElement && !gameOver) overlay.classList.remove("hidden");
-      if (document.pointerLockElement) { overlay.classList.add("hidden"); pointerLockGrace = 0.15; }
+      if (!document.pointerLockElement && !gameOver) {
+        paused = true;
+        overlay.classList.remove("hidden");
+        const card = overlay.querySelector(".card");
+        card.querySelector("h1").textContent = "Tạm dừng";
+        card.querySelector("h1").style.color = "#ffd39f";
+        card.querySelectorAll("p:not(.big)").forEach(p => p.style.display = "none");
+        card.querySelector(".big").textContent = "Click để tiếp tục";
+      }
+      if (document.pointerLockElement) {
+        if (paused) paused = false;
+        overlay.classList.add("hidden");
+        pointerLockGrace = 0.15;
+      }
       if (!document.pointerLockElement) setAiming(false);
     });
 
@@ -3781,6 +3795,11 @@
     function animate() {
       requestAnimationFrame(animate);
       const dt = Math.min(0.05, clock.getDelta());
+
+      if (paused) {
+        composer.render();
+        return;
+      }
 
       if (!gameOver) {
         if (freezeActive) {
