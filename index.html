@@ -4401,7 +4401,7 @@
       card.querySelector("h1").textContent = "Bạn đã thua!";
       card.querySelector("h1").style.color = "#ff6b6b";
       card.querySelectorAll("p:not(.big)").forEach(p => p.style.display = "none");
-      card.querySelector(".big").innerHTML = `Kills: ${player.kills} | Thời gian: ${formatTime(playTime)}<br><br><span style="font-size:14px;opacity:0.8">Nhấn R để chơi lại</span>`;
+      card.querySelector(".big").innerHTML = `Kills: ${player.kills} | Thời gian: ${formatTime(playTime)}<br><br><span style="font-size:14px;opacity:0.8">Nhấn F5 để chơi lại</span>`;
       document.exitPointerLock();
     }
 
