@@ -235,6 +235,191 @@
     import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
     import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
     import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    // === AUDIO SYSTEM (Web Audio API - procedural gunshot sounds) ===
+    let audioCtx = null;
+    let audioMaster = null;
+    const AUDIO_POOL_SIZE = 12;
+
+    function initAudio() {
+      if (audioCtx) return;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioMaster = audioCtx.createGain();
+      audioMaster.gain.value = 0.35;
+      audioMaster.connect(audioCtx.destination);
+    }
+
+    // Resume audio context on user interaction (browser autoplay policy)
+    function ensureAudio() {
+      if (!audioCtx) initAudio();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    // Generate a noise buffer for gunshot base
+    function createNoiseBuffer(duration, sampleRate) {
+      const length = duration * sampleRate;
+      const buffer = audioCtx.createBuffer(1, length, sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < length; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      return buffer;
+    }
+
+    // Weapon sound profiles
+    const weaponSoundProfiles = {
+      "player-rifle": { attack: 0.001, decay: 0.08, sustain: 0.04, release: 0.12, filterFreq: 3200, filterQ: 1.2, pitch: 180, pitchDecay: 0.05, gain: 0.7, distortion: 0.3 },
+      "smg":          { attack: 0.001, decay: 0.04, sustain: 0.02, release: 0.06, filterFreq: 4000, filterQ: 1.0, pitch: 220, pitchDecay: 0.03, gain: 0.45, distortion: 0.2 },
+      "battle-rifle": { attack: 0.001, decay: 0.10, sustain: 0.05, release: 0.18, filterFreq: 2500, filterQ: 1.5, pitch: 140, pitchDecay: 0.06, gain: 0.8, distortion: 0.4 },
+      "shotgun":      { attack: 0.001, decay: 0.12, sustain: 0.06, release: 0.25, filterFreq: 1800, filterQ: 0.8, pitch: 100, pitchDecay: 0.08, gain: 0.9, distortion: 0.5 },
+      "sniper":       { attack: 0.001, decay: 0.06, sustain: 0.03, release: 0.35, filterFreq: 5000, filterQ: 2.0, pitch: 250, pitchDecay: 0.04, gain: 1.0, distortion: 0.35 },
+      "rpg":          { attack: 0.005, decay: 0.15, sustain: 0.10, release: 0.40, filterFreq: 800,  filterQ: 0.6, pitch: 60,  pitchDecay: 0.12, gain: 1.0, distortion: 0.6 },
+      "minigun":      { attack: 0.001, decay: 0.03, sustain: 0.01, release: 0.04, filterFreq: 3800, filterQ: 1.0, pitch: 200, pitchDecay: 0.02, gain: 0.4, distortion: 0.2 },
+      "plasma-rifle": { attack: 0.001, decay: 0.06, sustain: 0.08, release: 0.15, filterFreq: 6000, filterQ: 3.0, pitch: 600, pitchDecay: 0.1,  gain: 0.6, distortion: 0.1 },
+      "dual-pistol":  { attack: 0.001, decay: 0.05, sustain: 0.02, release: 0.08, filterFreq: 3600, filterQ: 1.3, pitch: 200, pitchDecay: 0.04, gain: 0.55, distortion: 0.25 },
+    };
+
+    let _noiseBuffer = null;
+    function getNoiseBuffer() {
+      if (!_noiseBuffer) _noiseBuffer = createNoiseBuffer(1, audioCtx.sampleRate);
+      return _noiseBuffer;
+    }
+
+    // Create distortion curve for waveshaper
+    function makeDistortionCurve(amount) {
+      const samples = 44100;
+      const curve = new Float32Array(samples);
+      const deg = Math.PI / 180;
+      const k = amount * 100;
+      for (let i = 0; i < samples; i++) {
+        const x = (i * 2) / samples - 1;
+        curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+      }
+      return curve;
+    }
+
+    function playGunSound(weaponId, volume = 1.0) {
+      if (!audioCtx) return;
+      ensureAudio();
+
+      const prof = weaponSoundProfiles[weaponId] || weaponSoundProfiles["player-rifle"];
+      const now = audioCtx.currentTime;
+      const totalDuration = prof.attack + prof.decay + prof.sustain + prof.release;
+
+      // Layer 1: Noise burst (gunshot crack)
+      const noiseSource = audioCtx.createBufferSource();
+      noiseSource.buffer = getNoiseBuffer();
+
+      const noiseFilter = audioCtx.createBiquadFilter();
+      noiseFilter.type = "bandpass";
+      noiseFilter.frequency.setValueAtTime(prof.filterFreq, now);
+      noiseFilter.frequency.exponentialRampToValueAtTime(prof.filterFreq * 0.3, now + totalDuration);
+      noiseFilter.Q.value = prof.filterQ;
+
+      const noiseGain = audioCtx.createGain();
+      noiseGain.gain.setValueAtTime(0, now);
+      noiseGain.gain.linearRampToValueAtTime(prof.gain * volume, now + prof.attack);
+      noiseGain.gain.linearRampToValueAtTime(prof.gain * volume * 0.5, now + prof.attack + prof.decay);
+      noiseGain.gain.linearRampToValueAtTime(prof.gain * volume * 0.15, now + prof.attack + prof.decay + prof.sustain);
+      noiseGain.gain.linearRampToValueAtTime(0, now + totalDuration);
+
+      // Layer 2: Low-frequency punch (body of the shot)
+      const osc = audioCtx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(prof.pitch, now);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(30, prof.pitch * 0.15), now + prof.pitchDecay + 0.1);
+
+      const oscGain = audioCtx.createGain();
+      oscGain.gain.setValueAtTime(prof.gain * volume * 0.6, now);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, now + prof.pitchDecay + 0.12);
+
+      // Distortion for grit
+      const distortion = audioCtx.createWaveShaper();
+      distortion.curve = makeDistortionCurve(prof.distortion);
+      distortion.oversample = "2x";
+
+      // High-pass to remove mud
+      const hiPass = audioCtx.createBiquadFilter();
+      hiPass.type = "highpass";
+      hiPass.frequency.value = 60;
+
+      // Connect noise chain
+      noiseSource.connect(noiseFilter);
+      noiseFilter.connect(distortion);
+      distortion.connect(noiseGain);
+      noiseGain.connect(hiPass);
+      hiPass.connect(audioMaster);
+
+      // Connect oscillator chain
+      osc.connect(oscGain);
+      oscGain.connect(audioMaster);
+
+      noiseSource.start(now);
+      noiseSource.stop(now + totalDuration + 0.05);
+      osc.start(now);
+      osc.stop(now + prof.pitchDecay + 0.15);
+    }
+
+    function playExplosionSound(volume = 1.0) {
+      if (!audioCtx) return;
+      ensureAudio();
+
+      const now = audioCtx.currentTime;
+
+      // Deep rumble
+      const osc = audioCtx.createOscillator();
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(50, now);
+      osc.frequency.exponentialRampToValueAtTime(20, now + 0.5);
+      const oscGain = audioCtx.createGain();
+      oscGain.gain.setValueAtTime(volume * 0.7, now);
+      oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+      osc.connect(oscGain);
+      oscGain.connect(audioMaster);
+
+      // Noise layer
+      const noiseSource = audioCtx.createBufferSource();
+      noiseSource.buffer = getNoiseBuffer();
+      const nFilter = audioCtx.createBiquadFilter();
+      nFilter.type = "lowpass";
+      nFilter.frequency.setValueAtTime(2000, now);
+      nFilter.frequency.exponentialRampToValueAtTime(200, now + 0.6);
+      const nGain = audioCtx.createGain();
+      nGain.gain.setValueAtTime(volume * 0.9, now);
+      nGain.gain.linearRampToValueAtTime(volume * 0.4, now + 0.15);
+      nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+
+      const distortion = audioCtx.createWaveShaper();
+      distortion.curve = makeDistortionCurve(0.7);
+      distortion.oversample = "2x";
+
+      noiseSource.connect(nFilter);
+      nFilter.connect(distortion);
+      distortion.connect(nGain);
+      nGain.connect(audioMaster);
+
+      osc.start(now);
+      osc.stop(now + 0.85);
+      noiseSource.start(now);
+      noiseSource.stop(now + 0.85);
+    }
+
+    function playHitSound(volume = 0.5) {
+      if (!audioCtx) return;
+      ensureAudio();
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      osc.type = "square";
+      osc.frequency.setValueAtTime(400, now);
+      osc.frequency.exponentialRampToValueAtTime(150, now + 0.08);
+      const gain = audioCtx.createGain();
+      gain.gain.setValueAtTime(volume * 0.4, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+      osc.connect(gain);
+      gain.connect(audioMaster);
+      osc.start(now);
+      osc.stop(now + 0.12);
+    }
+
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x151f2f);
     scene.fog = new THREE.Fog(0x151f2f, 120, 1080);
@@ -2429,6 +2614,8 @@
 
     function detonateRocket(point, b) {
       spawnExplosion(point, b.explosionRadius);
+      const distToPlayer = point.distanceTo(camera.position);
+      playExplosionSound(Math.max(0.15, 1.0 - distToPlayer / 100));
       applyExplosionDamage(point, b.explosionRadius, b.damage, !b.enemy);
     }
 
@@ -2441,6 +2628,7 @@
       } else {
         player.hp -= amount;
       }
+      if (amount > 5) playHitSound(Math.min(1, amount / 40));
       player.hp = Math.max(player.hp, -1);
     }
 
@@ -4320,10 +4508,12 @@
 
     function tryPlayerShoot() {
       if (player.fireCooldown > 0 || gameOver) return;
+      ensureAudio();
       tempVec3.set(0, 0, -1).applyEuler(camera.rotation).normalize();
       tempVec4.copy(camera.position).addScaledVector(tempVec3, 0.7);
       const distanceHint = estimateShotDistance(tempVec4, tempVec3);
       shoot(tempVec4, tempVec3, playerWeapon, false, distanceHint);
+      playGunSound(playerWeapon.id, 1.0);
       player.fireCooldown = playerWeapon.shotInterval;
     }
 
@@ -4460,6 +4650,7 @@
     });
 
     overlay.addEventListener("click", () => {
+      ensureAudio();
       mouseDown = false;
       pointerLockGrace = 0.3;
       renderer.domElement.requestPointerLock();
@@ -4591,6 +4782,7 @@
               if (e.shootCd <= 0) {
                 const dir = applyDirectionSpread(aimBase, aimSpread);
                 shoot(muzzle, dir, weapon, true, dist, e.id);
+                playGunSound(weapon.id, Math.max(0.08, 1.0 - dist / 80));
                 e.burstLeft -= 1;
                 e.shootCd = weapon.shotInterval * THREE.MathUtils.randFloat(0.86, 1.18);
 
@@ -4602,6 +4794,7 @@
           } else if (e.shootCd <= 0) {
             const dir = applyDirectionSpread(aimBase, aimSpread);
             shoot(muzzle, dir, weapon, true, dist, e.id);
+            playGunSound(weapon.id, Math.max(0.08, 1.0 - dist / 80));
             e.shootCd = weapon.shotInterval * THREE.MathUtils.randFloat(0.88, 1.18);
           }
         }
