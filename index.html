@@ -4720,7 +4720,7 @@
 
       const moveIntensity = Math.min(1, moveInput.length() + (player.dashTimer > 0 ? 0.55 : 0));
       const actionBoost = mouseDown ? 0.42 : 0;
-      const targetScale = THREE.MathUtils.clamp(0.048 + moveIntensity * 0.9 + actionBoost, 0.048, 1.0);
+      const targetScale = THREE.MathUtils.clamp(0.038 + moveIntensity * 0.9 + actionBoost, 0.038, 1.0);
       const blend = Math.min(1, dt * 8.5);
       timeScale += (targetScale - timeScale) * blend;
     }
